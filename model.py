@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
 from math import sqrt
+from typing import Tuple, List, Optional
 
 
 @dataclass
@@ -88,6 +89,61 @@ class Embeddings(nn.Module):
         embeddings = self.dropout(embeddings)
         return embeddings
 
+
+class FeedForward(nn.Module):
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        
+        self.linear_1 = nn.Linear(in_features=config.hidden_size, out_features=config.intermediate_size)
+        self.relu = nn.ReLU()
+        self.linear_2 = nn.Linear(in_features=config.intermediate_size, out_features=config.hidden_size)
+        self.dropout = nn.Dropout(config.dropout)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.linear_2(self.relu(self.linear_1(x)))
+        x = self.dropout(x)
+        return x
+
+
+class AttentionHead(nn.Module):
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        
+        self.dim_k = config.hidden_size // config.num_attention_heads
+        self.dim_v = self.dim_k
+        self.linear_q = nn.Linear(in_features=config.hidden_size, out_features=self.dim_k)
+        self.linear_k = nn.Linear(in_features=config.hidden_size, out_features=self.dim_k)
+        self.linear_v = nn.Linear(in_features=config.hidden_size, out_features=self.dim_v)
+        
+    
+    def forward(self,
+                x_q: torch.Tensor,
+                x_k: torch.Tensor,
+                x_v: torch.Tensor, 
+                mask: torch.Tensor = None) -> torch.Tensor:
+        
+        return AttentionHead._scaled_dot_product_attention(
+            self.linear_q(x_q),
+            self.linear_k(x_k),
+            self.linear_v(x_v),
+            mask=mask)
+    
+    @staticmethod
+    def _scaled_dot_product_attention(query: torch.Tensor,
+                                      key: torch.Tensor,
+                                      value: torch.Tensor,
+                                      mask: torch.TensorType = None) -> Tuple(torch.Tensor, torch.Tensor):
+        #(B, hidden_size, dim_k)x(B, hidden_size, dim_k)
+        dim_k = query.shape[-1]
+        attn_scores = torch.bmm(query, key.transpose(-2, -1)) / sqrt(dim_k)
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill_(mask==0, float('-inf'))
+        weights = F.softmax(attn_scores, dim=-1)
+        return torch.bmm(weights, value), attn_scores
+    
+    
 
 
 class Transformer(nn.Module):
