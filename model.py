@@ -164,10 +164,33 @@ class RisidualConnection(nn.Module):
         x = x + self.dropout(sublayer(self.layer_norm(x)))
         return x
 
+class EncoderBlock(nn.Module):
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.multi_head_attention = MultiHeadAttention(config=config)
+        self.feed_forward = FeedForward(config=config)
+        self.risidual_1 = RisidualConnection(config=config)
+        self.risidual_2 = RisidualConnection(config=config)
+        
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        x = self.risidual_1(x, lambda x: self.multi_head_attention(x, x, x, mask))
+        x = self.risidual_2(x, self.feed_forward)
+        return x
+        
         
 
 class Encoder(nn.Module):
-    pass
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.encoders = nn.ModuleList([EncoderBlock(config) for _ in range(config.num_encoder_layers)])
+        self.layer_norm = nn.LayerNorm(normalized_shape=config.hidden_size, eps=config.eps)
+    
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        for encoder in self.encoders:
+            x = encoder(x, mask)
+        return self.layer_norm(x)
 
 
 class Decoder(nn.Module):
