@@ -151,7 +151,7 @@ class MultiHeadAttention(nn.Module):
                 mask: torch.Tensor = None) -> torch.Tensor:
         
         attention_scores = torch.cat([head(x_q, x_k, x_v)[0] for head in self.heads], dim=-1)
-        return self.W_o(self.dropout(attention_scores))
+        return self.linear_out(self.dropout(attention_scores))
 
 class RisidualConnection(nn.Module):
     
@@ -184,21 +184,66 @@ class Encoder(nn.Module):
     
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.encoders = nn.ModuleList([EncoderBlock(config) for _ in range(config.num_encoder_layers)])
+        self.encoder_blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config.num_encoder_layers)])
         self.layer_norm = nn.LayerNorm(normalized_shape=config.hidden_size, eps=config.eps)
     
     def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
-        for encoder in self.encoders:
+        for encoder in self.encoder_blocks:
             x = encoder(x, mask)
         return self.layer_norm(x)
 
 
+class DecoderBlock(nn.Module):
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.cross_attention = MultiHeadAttention(config=config)
+        self.multi_head_attention = MultiHeadAttention(config=config)
+        self.feed_forward = FeedForward(config=config)
+        self.risidual_1 = RisidualConnection(config=config)
+        self.risidual_2 = RisidualConnection(config=config)
+        self.risidual_3 = RisidualConnection(config=config)
+        
+        
+    def forward(self,
+                x: torch.Tensor,
+                encoder_outpout: torch.Tensor,
+                src_mask: torch.Tensor,
+                target_mask: torch.Tensor) -> torch.Tensor:
+        
+        x = self.risidual_1(x, lambda x: self.multi_head_attention(x, x, x, target_mask))
+        x = self.risidual_1(x, lambda: self.cross_attention(x, encoder_outpout, encoder_outpout, src_mask))
+        x = self.risidual_3(x, self.feed_forward)
+        return x
+
+
 class Decoder(nn.Module):
-    pass
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.decoder_blocks = nn.ModuleList([DecoderBlock(config) for _ in range(config.num_decoder_layers)])
+        self.layer_norm = nn.LayerNorm(normalized_shape=config.hidden_size, eps=config.eps)
+    
+    def forward(self,
+                x: torch.Tensor,
+                encoder_output: torch.Tensor,
+                src_mask: torch.Tensor,
+                target_mask: torch.Tensor) -> torch.Tensor:
+        
+        for decoder in self.decoder_blocks:
+            x = decoder(x, encoder_output, src_mask, target_mask)
+        return self.layer_norm(x)
 
 
 class Generator(nn.Module):
-    pass
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        
+        self.linear = nn.Linear(in_features=config.hidden_size, out_features=config.vocab_size)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.log_softmax(self.linear(x), dim=-1)
 
 
 class Transformer(nn.Module):
@@ -210,9 +255,9 @@ class Transformer(nn.Module):
                  encoder: Encoder,
                  decoder: Decoder,
                  generator: Generator,
-                 src_embeddings: InputEmbeddings,
-                 target_embeddings: InputEmbeddings,
-                 pos_encodings: PositionalEncoding) -> None:
+                 src_embeddings: Embeddings,
+                 target_embeddings: Embeddings
+                 ) -> None:
         super().__init__(Transformer, self)
 
         self.encoder = encoder
@@ -220,27 +265,22 @@ class Transformer(nn.Module):
         self.generator = generator
         self.src_embeddings = src_embeddings
         self.target_embeddings = target_embeddings
-        self.pos_encodings = pos_encodings
 
-    def encode(self,
-               src: torch.Tensor,
-               src_mask: torch.Tensor) -> torch.Tensor:
-
-        src_embeddings = self.src_embeddings(src)
-        pos_encodings = self.pos_encodings(src)
-        x = src_embeddings + pos_encodings
-        return self.encoder(x, src_mask)
+    def encode(self, src: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
+        src_embed = self.src_embeddings(src)
+        return self.encoder(src_embed, src_mask)
     
     def decode(self,
+               target: torch.tensor,
                encoder_output: torch.Tensor,
                src_mask: torch.Tensor,
-               target: torch.Tensor,
                target_mask: torch.Tensor) -> torch.Tensor:
         
-        target_embeddings = self.target_embeddings(target)
-        pos_encodings = self.pos_encodings(target)
-        x = target_embeddings + pos_encodings
-        return self.decoder(x, encoder_output, src_mask, target_mask)
+        target_embed = self.target_embeddings(target)
+        return self.decoder(target_embed, encoder_output, src_mask, target_mask)
+    
+    def generate(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        return self.generator(hidden_state)
 
     def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pass
