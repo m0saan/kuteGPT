@@ -27,18 +27,6 @@ class Config:
     tgt_seq_len: int = 512       # Maximum length of target sequence
 
 
-class Encoder(nn.Module):
-    pass
-
-
-class Decoder(nn.Module):
-    pass
-
-
-class Generator(nn.Module):
-    pass
-
-
 class InputEmbeddings(nn.Module):
     
     def __init__(self, config: Config) -> None:
@@ -135,6 +123,7 @@ class AttentionHead(nn.Module):
                                       key: torch.Tensor,
                                       value: torch.Tensor,
                                       mask: torch.TensorType = None) -> Tuple(torch.Tensor, torch.Tensor):
+        
         #(B, hidden_size, dim_k)x(B, hidden_size, dim_k)
         dim_k = query.shape[-1]
         attn_scores = torch.bmm(query, key.transpose(-2, -1)) / sqrt(dim_k)
@@ -143,7 +132,50 @@ class AttentionHead(nn.Module):
         weights = F.softmax(attn_scores, dim=-1)
         return torch.bmm(weights, value), attn_scores
     
+
+class MultiHeadAttention(nn.Module):
     
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        
+        assert config.hidden_size % config.num_attention_heads == 0, "d_model must be divisible by num_attention_heads"
+        dim_k = config.hidden_size // config.num_attention_heads
+        self.heads = nn.ModuleList([AttentionHead(config) for _ in range(config.num_attention_heads)])
+        self.linear_out = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size)
+        self.dropout = nn.Dropout(config.dropout)
+        
+    def forward(self,
+                x_q: torch.Tensor,
+                x_k: torch.Tensor,
+                x_v: torch.Tensor,
+                mask: torch.Tensor = None) -> torch.Tensor:
+        
+        attention_scores = torch.cat([head(x_q, x_k, x_v)[0] for head in self.heads], dim=-1)
+        return self.W_o(self.dropout(attention_scores))
+
+class RisidualConnection(nn.Module):
+    
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(normalized_shape=config.hidden_size, eps=config.eps)
+        self.dropout = nn.Dropout(p=config.dropout)
+        
+    def forward(self, x: torch.Tensor, sublayer: nn.Module) -> torch.Tensor:
+        x = x + self.dropout(sublayer(self.layer_norm(x)))
+        return x
+
+        
+
+class Encoder(nn.Module):
+    pass
+
+
+class Decoder(nn.Module):
+    pass
+
+
+class Generator(nn.Module):
+    pass
 
 
 class Transformer(nn.Module):
